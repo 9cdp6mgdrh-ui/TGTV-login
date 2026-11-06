@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TGTV – logga in</title>
+<style>
+  :root { --bg: #0d1016; --card: #161b24; --line: #2a3242; --text: #e8ecf3; --muted: #8b95a7; --accent: #3d8bfd; --gold: #f5c518; --red: #e5484d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
+  main { width: 100%; max-width: 420px; }
+  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -.3px; } h1 span { color: var(--gold); }
+  .lead { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 22px; }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 0 0 6px; }
+  input { width: 100%; font: inherit; color: var(--text); background: #0f131a; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 0 0 16px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  #code { font-size: 28px; letter-spacing: 4px; text-transform: uppercase; text-align: center; font-weight: 700; }
+  button { width: 100%; font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 13px; background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .6; }
+  button.link { background: none; color: var(--accent); padding: 10px 0 0; font-weight: 500; }
+  .msg { min-height: 22px; margin: 14px 0 0; font-size: 15px; color: var(--muted); }
+  .msg.err { color: var(--red); }
+  .who { color: var(--muted); margin: 0 0 16px; font-size: 15px; } .who b { color: var(--text); }
+  .done { text-align: center; } .done .big { font-size: 48px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TG<span>TV</span></h1>
+  <p class="lead">Koppla TV:n till ditt konto.</p>
+
+  <section class="card" id="step-login">
+    <label for="email">E-post</label>
+    <input id="email" type="email" autocomplete="email" inputmode="email">
+    <label for="password">Lösenord</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="signin">Logga in</button>
+    <button id="signup" class="link">Inget konto? Skapa ett</button>
+    <p class="msg" id="msg1"></p>
+  </section>
+
+  <section class="card" id="step-code" hidden>
+    <p class="who">Inloggad som <b id="who"></b></p>
+    <label for="code">Koden som visas på TV:n</label>
+    <input id="code" autocomplete="off" autocapitalize="characters" maxlength="7" placeholder="ABC-DEF">
+    <button id="approve">Koppla TV:n</button>
+    <p class="msg" id="msg2"></p>
+  </section>
+
+  <section class="card done" id="step-done" hidden>
+    <div class="big">✓</div>
+    <h2>Klart!</h2>
+    <p class="lead">TV:n loggas in om några sekunder. Du kan stänga sidan.</p>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var cfg = window.TGTV || {};
+  if (!cfg.url || !cfg.key || !window.supabase) {
+    document.querySelector('main').insertAdjacentHTML('beforeend', '<p class="msg err">Sidan är inte färdiginställd än (config.js saknar Supabase-adressen eller nyckeln).</p>');
+    document.getElementById('step-login').hidden = true;
+    return;
+  }
+  // Sidan sparar ingen inloggning och förnyar den inte: den lämnas över till TV:n, som förnyar den själv.
+  var sb = window.supabase.createClient(cfg.url, cfg.key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: true, flowType: 'implicit' }
+  });
+  var session = null;
+  var params = new URLSearchParams(location.search);
+  if (params.get('code')) $('code').value = format(params.get('code'));
+
+  function format(c) {
+    c = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    return c.length > 3 ? c.slice(0, 3) + '-' + c.slice(3) : c;
+  }
+  function msg(id, text, err) { var m = $(id); m.textContent = text || ''; m.classList.toggle('err', !!err); }
+  function show(step) { ['step-login', 'step-code', 'step-done'].forEach(function (s) { $(s).hidden = s !== step; }); }
+
+  function loggedIn(s) {
+    session = s;
+    $('who').textContent = s.user.email;
+    show('step-code');
+    if ($('code').value.replace(/[^A-Z0-9]/gi, '').length === 6) $('approve').focus(); else $('code').focus();
+  }
+
+  // Tillbaka från bekräftelsemejlet: inloggningen finns i adressen.
+  sb.auth.getSession().then(function (r) { if (r.data && r.data.session) loggedIn(r.data.session); });
+
+  $('code').addEventListener('input', function () { this.value = format(this.value); });
+
+  $('signin').onclick = function () {
+    var b = this;
+    b.disabled = true; msg('msg1', 'Loggar in…');
+    sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value }).then(function (r) {
+      b.disabled = false;
+      if (r.error) { msg('msg1', r.error.message === 'Invalid login credentials' ? 'Fel e-post eller lösenord.' : r.error.message, true); return; }
+      msg('msg1', '');
+      loggedIn(r.data.session);
+    });
+  };
+
+  $('signup').onclick = function () {
+    var email = $('email').value.trim(), pw = $('password').value;
+    if (!email || pw.length < 6) { msg('msg1', 'Skriv e-post och ett lösenord på minst 6 tecken, och tryck sedan här igen.', true); return; }
+    msg('msg1', 'Skapar konto…');
+    sb.auth.signUp({ email: email, password: pw, options: { emailRedirectTo: location.href } }).then(function (r) {
+      if (r.error) { msg('msg1', r.error.message, true); return; }
+      if (r.data.session) { loggedIn(r.data.session); return; }
+      msg('msg1', 'Kontot är skapat. Öppna länken i mejlet vi skickade (på den här telefonen), så kommer du tillbaka hit.');
+    });
+  };
+
+  $('approve').onclick = function () {
+    var b = this;
+    var code = $('code').value.replace(/[^A-Z0-9]/gi, '');
+    if (code.length !== 6) { msg('msg2', 'Koden har sex tecken, t.ex. ABC-DEF.', true); return; }
+    b.disabled = true; msg('msg2', 'Kopplar…');
+    sb.rpc('approve_device_login', { p_code: code, p_refresh_token: session.refresh_token }).then(function (r) {
+      b.disabled = false;
+      if (r.error) { msg('msg2', r.error.message, true); return; }
+      if (!r.data) { msg('msg2', 'Koden hittades inte eller har gått ut. Starta inloggningen igen på TV:n.', true); return; }
+      show('step-done');
+    });
+  };
+})();
+</script>
+</body>
+</html>
