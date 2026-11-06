@@ -19,7 +19,9 @@
   #code { font-size: 28px; letter-spacing: 4px; text-transform: uppercase; text-align: center; font-weight: 700; }
   button { width: 100%; font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 13px; background: var(--accent); color: #fff; cursor: pointer; }
   button:disabled { opacity: .6; }
-  button.link { background: none; color: var(--accent); padding: 10px 0 0; font-weight: 500; }
+  button.link { background: none; color: var(--accent); padding: 10px 0 0; font-weight: 500; width: auto; }
+  .links { display: flex; justify-content: space-between; margin-top: 6px; }
+  h2 { font-size: 20px; margin: 0 0 16px; }
   .msg { min-height: 22px; margin: 14px 0 0; font-size: 15px; color: var(--muted); }
   .msg.err { color: var(--red); }
   .who { color: var(--muted); margin: 0 0 16px; font-size: 15px; } .who b { color: var(--text); }
@@ -33,13 +35,45 @@
   <p class="lead">Koppla TV:n till ditt konto.</p>
 
   <section class="card" id="step-login">
+    <h2>Logga in</h2>
     <label for="email">E-post</label>
     <input id="email" type="email" autocomplete="email" inputmode="email">
     <label for="password">Lösenord</label>
     <input id="password" type="password" autocomplete="current-password">
     <button id="signin">Logga in</button>
-    <button id="signup" class="link">Inget konto? Skapa ett</button>
     <p class="msg" id="msg1"></p>
+    <div class="links"><button class="link" id="to-signup">Skapa konto</button><button class="link" id="to-forgot">Glömt lösenordet?</button></div>
+  </section>
+
+  <section class="card" id="step-signup" hidden>
+    <h2>Skapa konto</h2>
+    <label for="su-email">E-post</label>
+    <input id="su-email" type="email" autocomplete="email" inputmode="email">
+    <label for="su-password">Välj lösenord (minst 6 tecken)</label>
+    <input id="su-password" type="password" autocomplete="new-password">
+    <label for="su-password2">Upprepa lösenordet</label>
+    <input id="su-password2" type="password" autocomplete="new-password">
+    <button id="signup">Skapa konto</button>
+    <p class="msg" id="msg-su"></p>
+    <div class="links"><button class="link" id="su-back">Har du redan ett konto? Logga in</button></div>
+  </section>
+
+  <section class="card" id="step-forgot" hidden>
+    <h2>Glömt lösenordet</h2>
+    <p class="who">Vi skickar en länk där du väljer ett nytt lösenord.</p>
+    <label for="fg-email">E-post</label>
+    <input id="fg-email" type="email" autocomplete="email" inputmode="email">
+    <button id="forgot">Skicka länk</button>
+    <p class="msg" id="msg-fg"></p>
+    <div class="links"><button class="link" id="fg-back">Tillbaka till inloggningen</button></div>
+  </section>
+
+  <section class="card" id="step-newpw" hidden>
+    <h2>Välj nytt lösenord</h2>
+    <label for="np-password">Nytt lösenord (minst 6 tecken)</label>
+    <input id="np-password" type="password" autocomplete="new-password">
+    <button id="newpw">Spara lösenordet</button>
+    <p class="msg" id="msg-np"></p>
   </section>
 
   <section class="card" id="step-code" hidden>
@@ -76,13 +110,25 @@
   var session = null;
   var params = new URLSearchParams(location.search);
   if (params.get('code')) $('code').value = format(params.get('code'));
+  // Länkar i mejl (bekräfta konto, nytt lösenord) leder tillbaka hit med koden kvar.
+  var back = location.origin + location.pathname + (params.get('code') ? '?code=' + encodeURIComponent(params.get('code')) : '');
 
   function format(c) {
     c = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     return c.length > 3 ? c.slice(0, 3) + '-' + c.slice(3) : c;
   }
   function msg(id, text, err) { var m = $(id); m.textContent = text || ''; m.classList.toggle('err', !!err); }
-  function show(step) { ['step-login', 'step-code', 'step-done'].forEach(function (s) { $(s).hidden = s !== step; }); }
+  var STEPS = ['step-login', 'step-signup', 'step-forgot', 'step-newpw', 'step-code', 'step-done'];
+  function show(step) { STEPS.forEach(function (s) { $(s).hidden = s !== step; }); }
+  function sv(e) {
+    var m = e && e.message || String(e);
+    if (/Invalid login credentials/i.test(m)) return 'Fel e-post eller lösenord.';
+    if (/Email not confirmed/i.test(m)) return 'Kontot är inte bekräftat än – öppna länken i mejlet vi skickade.';
+    if (/already registered|already been registered/i.test(m)) return 'Det finns redan ett konto med den e-postadressen. Logga in, eller välj Glömt lösenordet.';
+    if (/rate limit/i.test(m)) return 'För många mejl just nu. Vänta en stund och försök igen.';
+    if (/Password should be at least/i.test(m)) return 'Lösenordet måste ha minst 6 tecken.';
+    return m;
+  }
 
   function loggedIn(s) {
     session = s;
@@ -91,30 +137,70 @@
     if ($('code').value.replace(/[^A-Z0-9]/gi, '').length === 6) $('approve').focus(); else $('code').focus();
   }
 
-  // Tillbaka från bekräftelsemejlet: inloggningen finns i adressen.
-  sb.auth.getSession().then(function (r) { if (r.data && r.data.session) loggedIn(r.data.session); });
+  var recovering = false;
+  sb.auth.onAuthStateChange(function (event, s) {
+    if (event === 'PASSWORD_RECOVERY') { recovering = true; session = s; show('step-newpw'); }
+  });
+  // Tillbaka från ett mejl: inloggningen finns i adressen.
+  sb.auth.getSession().then(function (r) {
+    if (recovering || !(r.data && r.data.session)) return;
+    if (/type=recovery/.test(location.hash)) { session = r.data.session; show('step-newpw'); return; }
+    loggedIn(r.data.session);
+  });
 
   $('code').addEventListener('input', function () { this.value = format(this.value); });
+  $('to-signup').onclick = function () { $('su-email').value = $('email').value; show('step-signup'); };
+  $('to-forgot').onclick = function () { $('fg-email').value = $('email').value; show('step-forgot'); };
+  $('su-back').onclick = $('fg-back').onclick = function () { show('step-login'); };
 
   $('signin').onclick = function () {
     var b = this;
     b.disabled = true; msg('msg1', 'Loggar in…');
     sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value }).then(function (r) {
       b.disabled = false;
-      if (r.error) { msg('msg1', r.error.message === 'Invalid login credentials' ? 'Fel e-post eller lösenord.' : r.error.message, true); return; }
+      if (r.error) { msg('msg1', sv(r.error), true); return; }
       msg('msg1', '');
       loggedIn(r.data.session);
     });
   };
 
   $('signup').onclick = function () {
-    var email = $('email').value.trim(), pw = $('password').value;
-    if (!email || pw.length < 6) { msg('msg1', 'Skriv e-post och ett lösenord på minst 6 tecken, och tryck sedan här igen.', true); return; }
-    msg('msg1', 'Skapar konto…');
-    sb.auth.signUp({ email: email, password: pw, options: { emailRedirectTo: location.href } }).then(function (r) {
-      if (r.error) { msg('msg1', r.error.message, true); return; }
+    var b = this;
+    var email = $('su-email').value.trim(), pw = $('su-password').value;
+    if (!email) { msg('msg-su', 'Skriv din e-postadress.', true); return; }
+    if (pw.length < 6) { msg('msg-su', 'Lösenordet måste ha minst 6 tecken.', true); return; }
+    if (pw !== $('su-password2').value) { msg('msg-su', 'Lösenorden är inte lika.', true); return; }
+    b.disabled = true; msg('msg-su', 'Skapar konto…');
+    sb.auth.signUp({ email: email, password: pw, options: { emailRedirectTo: back } }).then(function (r) {
+      b.disabled = false;
+      if (r.error) { msg('msg-su', sv(r.error), true); return; }
       if (r.data.session) { loggedIn(r.data.session); return; }
-      msg('msg1', 'Kontot är skapat. Öppna länken i mejlet vi skickade (på den här telefonen), så kommer du tillbaka hit.');
+      msg('msg-su', 'Kontot är skapat! Öppna länken i mejlet vi skickade till ' + email + ' (på den här telefonen), så kommer du tillbaka hit inloggad.');
+    });
+  };
+
+  $('forgot').onclick = function () {
+    var b = this;
+    var email = $('fg-email').value.trim();
+    if (!email) { msg('msg-fg', 'Skriv din e-postadress.', true); return; }
+    b.disabled = true; msg('msg-fg', 'Skickar…');
+    sb.auth.resetPasswordForEmail(email, { redirectTo: back }).then(function (r) {
+      b.disabled = false;
+      if (r.error) { msg('msg-fg', sv(r.error), true); return; }
+      msg('msg-fg', 'Om det finns ett konto för ' + email + ' har vi skickat en länk. Öppna den på den här telefonen.');
+    });
+  };
+
+  $('newpw').onclick = function () {
+    var b = this;
+    var pw = $('np-password').value;
+    if (pw.length < 6) { msg('msg-np', 'Lösenordet måste ha minst 6 tecken.', true); return; }
+    b.disabled = true; msg('msg-np', 'Sparar…');
+    sb.auth.updateUser({ password: pw }).then(function (r) {
+      b.disabled = false;
+      if (r.error) { msg('msg-np', sv(r.error), true); return; }
+      // Inloggad med det nya lösenordet: fortsätt med koden från TV:n.
+      sb.auth.getSession().then(function (x) { loggedIn((x.data && x.data.session) || session); });
     });
   };
 
