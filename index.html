@@ -111,7 +111,8 @@
   var params = new URLSearchParams(location.search);
   if (params.get('code')) $('code').value = format(params.get('code'));
   // Länkar i mejl (bekräfta konto, nytt lösenord) leder tillbaka hit med koden kvar.
-  var back = location.origin + location.pathname + (params.get('code') ? '?code=' + encodeURIComponent(params.get('code')) : '');
+  var back = location.origin + location.pathname + (params.get('code') ? '?code=' + encodeURIComponent(params.get('code')) +
+    (params.get('unlock') === '1' ? '&unlock=1' : '') : '');
 
   function format(c) {
     c = String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
@@ -204,12 +205,21 @@
     });
   };
 
+  // Upplåsning (barnprofil, vuxenkategorier): TV:n är redan inloggad och behöver bara veta att
+  // kontot godkänner. Sidan lämnar då bara sin kortlivade åtkomsttoken, inte inloggningen.
+  var unlock = params.get('unlock') === '1';
+  if (unlock) {
+    document.querySelector('.lead').textContent = 'Godkänn på TV:n med ditt konto.';
+    $('approve').textContent = 'Godkänn';
+    document.querySelector('#step-done .lead').textContent = 'Godkänt. TV:n låses upp om några sekunder. Du kan stänga sidan.';
+  }
+
   $('approve').onclick = function () {
     var b = this;
     var code = $('code').value.replace(/[^A-Z0-9]/gi, '');
     if (code.length !== 6) { msg('msg2', 'Koden har sex tecken, t.ex. ABC-DEF.', true); return; }
-    b.disabled = true; msg('msg2', 'Kopplar…');
-    sb.rpc('approve_device_login', { p_code: code, p_refresh_token: session.refresh_token }).then(function (r) {
+    b.disabled = true; msg('msg2', unlock ? 'Godkänner…' : 'Kopplar…');
+    sb.rpc('approve_device_login', { p_code: code, p_refresh_token: unlock ? session.access_token : session.refresh_token }).then(function (r) {
       b.disabled = false;
       if (r.error) { msg('msg2', r.error.message, true); return; }
       if (!r.data) { msg('msg2', 'Koden hittades inte eller har gått ut. Starta inloggningen igen på TV:n.', true); return; }
